@@ -18,6 +18,7 @@ err()  { echo -e "${RED}[x]${RESET} $1"; exit 1; }
 
 PLUGIN_DIR="$HOME/Plugins/SwiftBar"
 CACHE_DIR="$HOME/.cache/mcp-scan"
+CONFIG_DIR="$HOME/.config/mcp-scan"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Prerequisites ---
@@ -64,12 +65,12 @@ else
 fi
 
 # --- Copy plugin ---
-PLUGIN_FILE="$PLUGIN_DIR/mcp-scan.30m.sh"
-if [ -f "$SCRIPT_DIR/mcp-scan.30m.sh" ]; then
-    cp "$SCRIPT_DIR/mcp-scan.30m.sh" "$PLUGIN_FILE"
+PLUGIN_FILE="$PLUGIN_DIR/mcp-scan.5m.sh"
+if [ -f "$SCRIPT_DIR/mcp-scan.5m.sh" ]; then
+    cp "$SCRIPT_DIR/mcp-scan.5m.sh" "$PLUGIN_FILE"
 else
     log "Downloading plugin..."
-    if ! curl -fsSL "https://raw.githubusercontent.com/naufalafif/mcp-scan-bar/main/mcp-scan.30m.sh" -o "$PLUGIN_FILE"; then
+    if ! curl -fsSL "https://raw.githubusercontent.com/naufalafif/mcpscan-swiftbar/main/mcp-scan.5m.sh" -o "$PLUGIN_FILE"; then
         err "Failed to download plugin (check URL or network)"
     fi
     # Validate downloaded file is a bash script, not an error page
@@ -81,13 +82,19 @@ fi
 chmod +x "$PLUGIN_FILE"
 log "Plugin installed to $PLUGIN_FILE"
 
-# --- Initialize ignore file ---
-mkdir -p "$CACHE_DIR"
+# --- Initialize cache and config ---
+mkdir -p "$CACHE_DIR" "$CONFIG_DIR"
 if [ ! -f "$CACHE_DIR/ignore.json" ]; then
     echo '[]' > "$CACHE_DIR/ignore.json"
     log "Initialized ignore list at $CACHE_DIR/ignore.json"
 else
     log "Ignore list already exists"
+fi
+if [ ! -f "$CONFIG_DIR/config" ]; then
+    echo 'SCAN_INTERVAL=30  # Scan interval in minutes' > "$CONFIG_DIR/config"
+    log "Initialized config at $CONFIG_DIR/config"
+else
+    log "Config already exists"
 fi
 
 # --- Smoke test ---
