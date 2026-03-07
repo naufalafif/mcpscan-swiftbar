@@ -2,7 +2,7 @@
 
 macOS menu bar plugin that shows MCP server security findings from [Cisco's mcp-scanner](https://github.com/cisco/mcp-scanner).
 
-![menu bar](https://img.shields.io/badge/macOS-menu%20bar-black?style=flat-square) ![swiftbar](https://img.shields.io/badge/SwiftBar-plugin-blue?style=flat-square) ![lint](https://github.com/naufalafif/mcp-scan-bar/actions/workflows/lint.yml/badge.svg) ![security](https://github.com/naufalafif/mcp-scan-bar/actions/workflows/security.yml/badge.svg)
+![menu bar](https://img.shields.io/badge/macOS-menu%20bar-black?style=flat-square) ![swiftbar](https://img.shields.io/badge/SwiftBar-plugin-blue?style=flat-square) ![lint](https://github.com/naufalafif/mcpscan-swiftbar/actions/workflows/lint.yml/badge.svg) ![security](https://github.com/naufalafif/mcpscan-swiftbar/actions/workflows/security.yml/badge.svg)
 
 ## What it shows
 
@@ -53,8 +53,8 @@ bash <(curl -sL https://raw.githubusercontent.com/naufalafif/mcp-scan-bar/main/s
 Or clone and run:
 
 ```bash
-git clone git@github.com:naufalafif/mcp-scan-bar.git
-cd mcp-scan-bar
+git clone git@github.com:naufalafif/mcpscan-swiftbar.git
+cd mcpscan-swiftbar
 bash setup.sh
 ```
 
