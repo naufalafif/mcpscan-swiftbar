@@ -1,8 +1,16 @@
 # MCP Scan Bar
 
+<p align="center">
+  <img src="icon.svg" width="80" alt="MCP Scan Bar icon" />
+</p>
+
 macOS menu bar plugin that shows MCP server security findings from [Cisco's mcp-scanner](https://github.com/cisco/mcp-scanner).
 
 ![menu bar](https://img.shields.io/badge/macOS-menu%20bar-black?style=flat-square) ![swiftbar](https://img.shields.io/badge/SwiftBar-plugin-blue?style=flat-square) ![lint](https://github.com/naufalafif/mcpscan-swiftbar/actions/workflows/lint.yml/badge.svg) ![security](https://github.com/naufalafif/mcpscan-swiftbar/actions/workflows/security.yml/badge.svg)
+
+<p align="center">
+  <img src="mcpscan-swiftbar.png" width="600" alt="MCP Scan Bar screenshot" />
+</p>
 
 ## What it shows
 
