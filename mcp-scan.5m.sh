@@ -238,12 +238,19 @@ high_count = sum(1 for f in active if f["severity"] in ("HIGH", "CRITICAL"))
 med_count = sum(1 for f in active if f["severity"] == "MEDIUM")
 low_count = sum(1 for f in active if f["severity"] == "LOW")
 
-# Handle empty scan results (no configs or tools found)
+# Handle empty scan results
 if total_tools == 0:
-    print("🛡️ ? | color=#888888")
+    configs_found = sum(1 for v in data.values() if isinstance(v, list))
+    if configs_found == 0:
+        bar_line = "🛡️ ? | color=#888888"
+        status_line = "No MCP configs found | size=12 color=#888888"
+    else:
+        bar_line = "🛡️ ✓ | color=#44bb44"
+        status_line = f"✅ All clear — {configs_found} config{'s' if configs_found != 1 else ''} scanned, 0 threats | size=12 color=#44bb44"
+    print(bar_line)
     print("---")
     print("MCP Security Scanner | size=14 color=#ffffff")
-    print("No MCP configs found | size=12 color=#888888")
+    print(status_line)
     print("---")
     print(f"🔄 Scan Now | bash='{plugin_path}' param1=rescan terminal=false refresh=true")
     sys.exit(0)
