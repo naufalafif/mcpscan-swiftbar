@@ -72,32 +72,27 @@ json.dump(data, open(f, 'w'), indent=2)
 
 if [ "$1" = "ignore" ] && [ -n "$2" ]; then
   add_ignore "$2"
-  open "swiftbar://refreshplugin?name=mcp-scan"
   exit 0
 fi
 
 if [ "$1" = "unignore" ] && [ -n "$2" ]; then
   remove_ignore "$2"
-  open "swiftbar://refreshplugin?name=mcp-scan"
   exit 0
 fi
 
 if [ "$1" = "rescan" ]; then
   rm -f "$CACHE_FILE" "$LOCK_FILE"
-  open "swiftbar://refreshplugin?name=mcp-scan"
   exit 0
 fi
 
 if [ "$1" = "clear-ignores" ]; then
   echo '[]' > "$IGNORE_FILE"
-  open "swiftbar://refreshplugin?name=mcp-scan"
   exit 0
 fi
 
 if [ "$1" = "set-interval" ] && [ -n "$2" ]; then
   mkdir -p "$(dirname "$CONFIG_FILE")"
   echo "SCAN_INTERVAL=$2  # Scan interval in minutes" > "$CONFIG_FILE"
-  open "swiftbar://refreshplugin?name=mcp-scan"
   exit 0
 fi
 
