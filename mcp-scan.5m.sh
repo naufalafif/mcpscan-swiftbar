@@ -121,36 +121,37 @@ fi
 
 if $needs_scan && [ ! -f "$LOCK_FILE" ]; then
   touch "$LOCK_FILE"
-  trap 'rm -f "$LOCK_FILE"' EXIT
-  # Timeout after 120s to prevent stuck processes accumulating
-  if command -v timeout &>/dev/null; then
-    SCANNER_CMD="timeout 120 mcp-scanner"
-  else
-    SCANNER_CMD="mcp-scanner"
-  fi
-  $SCANNER_CMD --analyzers yara --raw known-configs 2>/dev/null | python3 -c "
+  # Run scanner in background so SwiftBar stays responsive
+  (
+    if command -v timeout &>/dev/null; then
+      SCANNER_CMD="timeout 120 mcp-scanner"
+    else
+      SCANNER_CMD="mcp-scanner"
+    fi
+    $SCANNER_CMD --analyzers yara --raw known-configs 2>/dev/null | python3 -c "
 import sys
 content = sys.stdin.read().strip()
 idx = content.find('{')
 if idx >= 0: print(content[idx:])
 " > "$CACHE_FILE.tmp"
-  if [ -s "$CACHE_FILE.tmp" ] && python3 -c "
+    if [ -s "$CACHE_FILE.tmp" ] && python3 -c "
 import json, sys
 json.load(open(sys.argv[1]))
 " "$CACHE_FILE.tmp" 2>/dev/null; then
-    mv "$CACHE_FILE.tmp" "$CACHE_FILE"
-  else
-    rm -f "$CACHE_FILE.tmp"
-  fi
-  rm -f "$LOCK_FILE"
-  trap - EXIT
+      mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    else
+      rm -f "$CACHE_FILE.tmp"
+    fi
+    rm -f "$LOCK_FILE"
+  ) &>/dev/null &
+  disown
 fi
 
 # --- Parse & Display ---
 
 if [ ! -f "$CACHE_FILE" ]; then
   if [ -f "$LOCK_FILE" ]; then
-    echo "🛡️ ..."
+    echo "🛡️ ~ | color=#666666"
     echo "---"
     echo "Scanning MCP servers... | color=#888888"
   else
@@ -163,7 +164,9 @@ if [ ! -f "$CACHE_FILE" ]; then
 fi
 
 # Parse results with Python
-export PLUGIN_PATH SCAN_INTERVAL
+IS_SCANNING="false"
+[ -f "$LOCK_FILE" ] && IS_SCANNING="true"
+export PLUGIN_PATH SCAN_INTERVAL IS_SCANNING
 python3 << 'PYEOF'
 import json, os, sys, time
 
@@ -171,6 +174,7 @@ cache_file = os.path.expanduser("~/.cache/mcp-scan/last-scan.json")
 ignore_file = os.path.expanduser("~/.cache/mcp-scan/ignore.json")
 plugin_path = os.environ.get("PLUGIN_PATH", "")
 scan_interval = int(os.environ.get("SCAN_INTERVAL", "30"))
+is_scanning = os.environ.get("IS_SCANNING", "false") == "true"
 
 try:
     with open(cache_file) as f:
@@ -249,15 +253,20 @@ if total_tools == 0:
     print(f"🔄 Scan Now | bash='{plugin_path}' param1=rescan terminal=false refresh=true")
     sys.exit(0)
 
-# Menu bar icon
-if high_count > 0:
-    print(f"🛡️ {high_count} | color=#ff4444")
-elif med_count > 0:
-    print(f"🛡️ {med_count} | color=#ffaa00")
-elif low_count > 0:
-    print(f"🛡️ {low_count} | color=#88aa00")
+# Menu bar icon — dimmed while scan is in progress
+if is_scanning:
+    colors = {"high": "#884444", "med": "#886622", "low": "#446633", "ok": "#336633"}
 else:
-    print("🛡️ ✓ | color=#44bb44")
+    colors = {"high": "#ff4444", "med": "#ffaa00", "low": "#88aa00", "ok": "#44bb44"}
+
+if high_count > 0:
+    print(f"🛡️ {high_count} | color={colors['high']}")
+elif med_count > 0:
+    print(f"🛡️ {med_count} | color={colors['med']}")
+elif low_count > 0:
+    print(f"🛡️ {low_count} | color={colors['low']}")
+else:
+    print(f"🛡️ ✓ | color={colors['ok']}")
 
 print("---")
 
@@ -317,16 +326,16 @@ if safe_servers:
         print(f"--{sanitize(server)}: {count} tools ✓ | size=11 color=#44bb44")
     print("---")
 
+# Scan interval submenu
+intervals = [("5 minutes", 5), ("10 minutes", 10), ("15 minutes", 15),
+             ("30 minutes", 30), ("1 hour", 60), ("2 hours", 120), ("6 hours", 360)]
+print(f"⏱ Scan every {scan_interval}m | size=12")
+for label, minutes in intervals:
+    check = "✓ " if minutes == scan_interval else "    "
+    print(f"--{check}{label} | bash='{plugin_path}' param1=set-interval param2={minutes} terminal=false refresh=true")
+print("---")
 # Actions
 print(f"🔄 Scan Now | bash='{plugin_path}' param1=rescan terminal=false refresh=true")
 print(f"🗑️ Clear All Ignores | bash='{plugin_path}' param1=clear-ignores terminal=false refresh=true")
 print(f"📂 Open Ignore List | bash=/usr/bin/open param1='{ignore_file}' terminal=false")
-print("---")
-# Scan interval submenu
-intervals = [("5 minutes", 5), ("10 minutes", 10), ("15 minutes", 15),
-             ("30 minutes", 30), ("1 hour", 60), ("2 hours", 120), ("6 hours", 360)]
-print(f"⏱ Scan Interval: every {scan_interval}m | size=12 color=#888888")
-for label, minutes in intervals:
-    check = "✓ " if minutes == scan_interval else "   "
-    print(f"--{check}{label} | bash='{plugin_path}' param1=set-interval param2={minutes} terminal=false refresh=true")
 PYEOF
