@@ -64,6 +64,9 @@ else
     fi
 fi
 
+# --- Remove old plugin versions ---
+rm -f "$PLUGIN_DIR"/mcp-scan.*.sh
+
 # --- Copy plugin ---
 PLUGIN_FILE="$PLUGIN_DIR/mcp-scan.5m.sh"
 if [ -f "$SCRIPT_DIR/mcp-scan.5m.sh" ]; then
