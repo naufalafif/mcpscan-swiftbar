@@ -4,7 +4,7 @@
   <img src="icon.svg" width="80" alt="MCP Scan Bar icon" />
 </p>
 
-macOS menu bar plugin that shows MCP server security findings from [Cisco's mcp-scanner](https://github.com/cisco/mcp-scanner).
+macOS menu bar plugin that shows MCP server security findings from [Cisco's mcp-scanner](https://github.com/cisco-ai-defense/mcp-scanner).
 
 ![menu bar](https://img.shields.io/badge/macOS-menu%20bar-black?style=flat-square) ![swiftbar](https://img.shields.io/badge/SwiftBar-plugin-blue?style=flat-square) ![lint](https://github.com/naufalafif/mcpscan-swiftbar/actions/workflows/lint.yml/badge.svg) ![security](https://github.com/naufalafif/mcpscan-swiftbar/actions/workflows/security.yml/badge.svg)
 
@@ -92,7 +92,7 @@ The script runs every 5 minutes but only fires mcp-scanner when the cached resul
 
 1. Installs [SwiftBar](https://github.com/swiftbar/SwiftBar) (if not present)
 2. Installs [uv](https://github.com/astral-sh/uv) via Homebrew (if not present)
-3. Installs [mcp-scanner](https://github.com/cisco/mcp-scanner) via `uv tool install`
+3. Installs [mcp-scanner](https://github.com/cisco-ai-defense/mcp-scanner) via `uv tool install`
 4. Copies the SwiftBar plugin to `~/Plugins/SwiftBar/`
 5. Initializes the ignore list at `~/.cache/mcp-scan/ignore.json`
 6. Creates default config at `~/.config/mcp-scan/config` (scan interval: 30 min)
