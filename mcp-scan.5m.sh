@@ -81,7 +81,8 @@ if [ "$1" = "unignore" ] && [ -n "$2" ]; then
 fi
 
 if [ "$1" = "rescan" ]; then
-  rm -f "$CACHE_FILE" "$LOCK_FILE"
+  rm -f "$LOCK_FILE"
+  touch "$CACHE_DIR/force-rescan"
   exit 0
 fi
 
@@ -101,6 +102,8 @@ fi
 needs_scan=false
 if [ ! -f "$CACHE_FILE" ]; then
   needs_scan=true
+elif [ -f "$CACHE_DIR/force-rescan" ]; then
+  needs_scan=true
 elif [ "$(( $(date +%s) - $(stat -f %m "$CACHE_FILE") ))" -gt "$MAX_AGE" ]; then
   needs_scan=true
 fi
@@ -116,6 +119,7 @@ fi
 
 if $needs_scan && [ ! -f "$LOCK_FILE" ]; then
   touch "$LOCK_FILE"
+  rm -f "$CACHE_DIR/force-rescan"
   # Run scanner in background so SwiftBar stays responsive
   (
     if command -v timeout &>/dev/null; then
@@ -146,9 +150,10 @@ fi
 
 if [ ! -f "$CACHE_FILE" ]; then
   if [ -f "$LOCK_FILE" ]; then
+    lock_age=$(( $(date +%s) - $(stat -f %m "$LOCK_FILE") ))
     echo "🛡️ ~ | color=#666666"
     echo "---"
-    echo "Scanning MCP servers... | color=#888888"
+    echo "Scanning MCP servers... (${lock_age}s) | color=#888888"
   else
     echo "🛡️ ?"
     echo "---"
