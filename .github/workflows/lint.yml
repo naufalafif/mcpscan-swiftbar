@@ -16,7 +16,7 @@ jobs:
         uses: ludeeus/action-shellcheck@master
         with:
           scandir: .
-          additional_files: "setup.sh mcp-scan.30m.sh"
+          additional_files: "setup.sh mcp-scan.5m.sh"
           severity: warning
 
   python-syntax:
@@ -27,13 +27,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Check embedded Python in mcp-scan.30m.sh
+      - name: Check embedded Python in mcp-scan.5m.sh
         run: |
           python3 << 'PYCHECK'
           import re, ast, sys
 
           errors = []
-          for filename in ["mcp-scan.30m.sh", "setup.sh"]:
+          for filename in ["mcp-scan.5m.sh", "setup.sh"]:
               with open(filename) as f:
                   content = f.read()
               # Find all heredoc Python blocks

@@ -10,6 +10,8 @@
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
+ICON="iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAD8UlEQVRYhcWXXUibVxjHfycfRrPFdeAiNuqN7mZFYiy72I1RZ9mousXRqWwyqGW99KsVZldoe+VHpC116mix0jpY/ECtNr1YWWdaZOAQEacXY4qtBtFeuCRLiUvMu4suQcWob7Td/+q85znP8/+fc5734TmCTUhMTNOrVIFKIaQC4F3gDQ4HXuAPSZLsgUBM68rK3GrIIEIDgyH1cyHoBHSHRBoJHkmiwul81h8W8B95z2ZBrxiSJFHidD7rF4mJaXq12v8nr37n2+EOBP5JVx45El8vBPmvmRxAI4TCpxAiWPg/kAMghChUgEiLNoBarUatVh9EQ7oCeFOulxCC4mILY2NPGBt7QnGxBSGiyl+dQq6H0WhkcHCA5uYm+vr66evrp7m5icHBAYxGo2wF+xag1+tpbGzg3r1B1tbWyMvLx2ptwWptITs7h4WFBYaHh+joaMdgOHp4AlQqFWfOVOBw/EJmZiZlZV9w+nQFi4uL4TXLy8tUV9dgsXyGwXCUR49+pra2Bo1Gs6cAkZycKkUy6nQ67PYR4uPjsVpbsNl62NjY2DWgUqmkrKyUurrzuN1uCgqK8Hg80QnIyMjgwYP7HD/+Pqurq1tsJpMJszkbAIfjMZOTk1vser2eiYnfOHmykOnp6YgC9pUDL154t3xXVVVitTbh9Xrxer1YrU1UVVXu6hMJqn2t2gSTyURRUSGFhZ/g8/kA6O7+Abt9hNFRB1NTU7Liyf4Nc3LM2Gw9YXIAn8+HzdZLTo5Zbjj5AiRJ2rHoRFeHohDgcDymtLSE2NjY8FxcXBylpSWMjjpkC5CdA5OTkwwPj2C3j2Cz9QJQVlZCQkICSqXs/ezvBLTarZ3ZjRutnDtXh1Ybh1YbR23tecrLv6KtrY2sLNOOPpFwqIUoK8tEe3sbHR3fU1NTva9CtOsJeDwe8vLyaW39josXv+Xhw58wmyNnekyMBpfLzYUL9dy9282JEx/tSr6nAIBAIEBn523M5lzGx8e5c6eLrq7bpKSkhNckJSVx/fo1enp+ZH5+ntzcD7l69Rrr6+t7hd/9CnaC0WjkypXLHDv2Hjdv3gLg7NmvmZmZ5dKly7ILkWwB8LIhsVg+pb7+GwAaGhoZGrqHJMkOhUhOTnUTZUccasf8fn817gBuBTAXrbff7z8IOcCcSpKk+0KIzO2WdeMHbLxjOEjwMJTPnWimft3JNBLxYRLQJxN8O+FwBPz1HOWKc/u0KxgMpIeeZqeEoJfX+DQDcSpp6emAEsDjcc3qdG/NCMHHwN6N3MHgAvHl0tLTAQBlaNbjcc1qtXGdQih8CoXQ8fJKYg6J9G8h+B24FQwGyp3OpYmQ4V/ZtmmohDlcPQAAAABJRU5ErkJggg=="
+
 # realpath may not exist on pre-Monterey macOS; fall back to $0
 PLUGIN_PATH="$(realpath "$0" 2>/dev/null || echo "$0")"
 CACHE_DIR="$HOME/.cache/mcp-scan"
@@ -151,11 +153,11 @@ fi
 
 if [ ! -f "$CACHE_FILE" ]; then
   if [ -f "$LOCK_FILE" ]; then
-    echo "🛡️ ~ | color=#666666"
+    echo "~ | image=$ICON color=#666666"
     echo "---"
     echo "Scanning MCP servers... | color=#888888"
   else
-    echo "🛡️ ?"
+    echo "? | image=$ICON"
     echo "---"
     echo "No scan data yet | color=#888888"
     echo "Scan Now | bash='$PLUGIN_PATH' param1=rescan terminal=false refresh=true"
@@ -166,7 +168,7 @@ fi
 # Parse results with Python
 IS_SCANNING="false"
 [ -f "$LOCK_FILE" ] && IS_SCANNING="true"
-export PLUGIN_PATH SCAN_INTERVAL IS_SCANNING
+export PLUGIN_PATH SCAN_INTERVAL IS_SCANNING ICON
 python3 << 'PYEOF'
 import json, os, sys, time
 
@@ -175,6 +177,7 @@ ignore_file = os.path.expanduser("~/.cache/mcp-scan/ignore.json")
 plugin_path = os.environ.get("PLUGIN_PATH", "")
 scan_interval = int(os.environ.get("SCAN_INTERVAL", "30"))
 is_scanning = os.environ.get("IS_SCANNING", "false") == "true"
+icon = os.environ.get("ICON", "")
 
 try:
     with open(cache_file) as f:
@@ -245,7 +248,7 @@ low_count = sum(1 for f in active if f["severity"] == "LOW")
 
 # Handle empty scan results (no configs or tools found)
 if total_tools == 0:
-    print("🛡️ ? | color=#888888")
+    print(f"? | image={icon} color=#888888")
     print("---")
     print("MCP Security Scanner | size=14 color=#ffffff")
     print("No MCP configs found | size=12 color=#888888")
@@ -260,13 +263,13 @@ else:
     colors = {"high": "#ff4444", "med": "#ffaa00", "low": "#88aa00", "ok": "#44bb44"}
 
 if high_count > 0:
-    print(f"🛡️ {high_count} | color={colors['high']}")
+    print(f"{high_count} | image={icon} color={colors['high']}")
 elif med_count > 0:
-    print(f"🛡️ {med_count} | color={colors['med']}")
+    print(f"{med_count} | image={icon} color={colors['med']}")
 elif low_count > 0:
-    print(f"🛡️ {low_count} | color={colors['low']}")
+    print(f"{low_count} | image={icon} color={colors['low']}")
 else:
-    print(f"🛡️ ✓ | color={colors['ok']}")
+    print(f"✓ | image={icon} color={colors['ok']}")
 
 print("---")
 
