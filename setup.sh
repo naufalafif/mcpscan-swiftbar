@@ -64,6 +64,17 @@ else
     fi
 fi
 
+# --- Install skill-scanner (optional) ---
+if command -v skill-scanner &>/dev/null; then
+    log "skill-scanner already installed"
+else
+    log "Installing skill-scanner via uv..."
+    if ! uv tool install --python 3.13 cisco-ai-skill-scanner 2>/dev/null; then
+        warn "Python 3.13 unavailable, trying without version pin..."
+        uv tool install cisco-ai-skill-scanner || warn "Failed to install skill-scanner (optional)"
+    fi
+fi
+
 # --- Remove old plugin versions ---
 rm -f "$PLUGIN_DIR"/mcp-scan.*.sh
 
@@ -100,9 +111,12 @@ else
     log "Config already exists"
 fi
 
-# --- Smoke test ---
+# --- Smoke tests ---
 if ! mcp-scanner --help &>/dev/null; then
     warn "mcp-scanner installed but --help failed; plugin may not work correctly"
+fi
+if command -v skill-scanner &>/dev/null && ! skill-scanner --help &>/dev/null; then
+    warn "skill-scanner installed but --help failed; skill scanning may not work"
 fi
 
 # --- Launch SwiftBar ---
@@ -115,7 +129,12 @@ echo ""
 echo -e "${BOLD}Setup complete!${RESET}"
 echo ""
 echo "  Menu bar: Shield icon + finding count + severity color"
-echo "  Dropdown: Active findings, ignored items, safe servers, actions"
+echo "  Dropdown: MCP findings, skill findings, ignored items, safe servers/skills, actions"
+if command -v skill-scanner &>/dev/null; then
+    echo "  Scanners: mcp-scanner ✓, skill-scanner ✓"
+else
+    echo "  Scanners: mcp-scanner ✓, skill-scanner ✗ (optional)"
+fi
 echo ""
 echo "  Plugin scans every 30 minutes."
 echo "  Click 'Scan Now' in the dropdown to trigger immediately."

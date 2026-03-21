@@ -17,12 +17,33 @@ CONFIG_FILE="$HOME/.config/mcp-scan/config"
 CACHE_FILE="$CACHE_DIR/last-scan.json"
 IGNORE_FILE="$CACHE_DIR/ignore.json"
 LOCK_FILE="$CACHE_DIR/scan.lock"
+SKILL_CACHE_FILE="$CACHE_DIR/last-skill-scan.json"
+SKILL_LOCK_FILE="$CACHE_DIR/skill-scan.lock"
+
+DEFAULT_SKILL_DIRS=(
+  "$HOME/.cursor/skills"
+  "$HOME/.cursor/rules"
+  "$HOME/.claude/skills"
+  "$HOME/.agents/skills"
+  "$HOME/.codex/skills"
+  "$HOME/.cline/skills"
+  "$HOME/.opencode/skills"
+  "$HOME/.continue/skills"
+  "$HOME/.gemini/skills"
+)
 
 # Load user config (SCAN_INTERVAL in minutes, default 30)
 SCAN_INTERVAL=30
 # shellcheck source=/dev/null
 [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
 MAX_AGE=$(( SCAN_INTERVAL * 60 ))
+
+# Parse SKILL_DIRS (colon-separated) or fall back to defaults
+if [ -n "${SKILL_DIRS:-}" ]; then
+  IFS=':' read -ra SKILL_DIR_LIST <<< "$SKILL_DIRS"
+else
+  SKILL_DIR_LIST=("${DEFAULT_SKILL_DIRS[@]}")
+fi
 
 mkdir -p "$CACHE_DIR"
 
@@ -81,7 +102,7 @@ if [ "$1" = "unignore" ] && [ -n "$2" ]; then
 fi
 
 if [ "$1" = "rescan" ]; then
-  rm -f "$LOCK_FILE"
+  rm -f "$LOCK_FILE" "$SKILL_LOCK_FILE"
   touch "$CACHE_DIR/force-rescan"
   exit 0
 fi
@@ -99,28 +120,45 @@ fi
 
 # --- Run Scan (with cache) ---
 
-needs_scan=false
+needs_mcp_scan=false
 if [ ! -f "$CACHE_FILE" ]; then
-  needs_scan=true
+  needs_mcp_scan=true
 elif [ -f "$CACHE_DIR/force-rescan" ]; then
-  needs_scan=true
+  needs_mcp_scan=true
 elif [ "$(( $(date +%s) - $(stat -f %m "$CACHE_FILE") ))" -gt "$MAX_AGE" ]; then
-  needs_scan=true
+  needs_mcp_scan=true
+fi
+
+needs_skill_scan=false
+if command -v skill-scanner &>/dev/null; then
+  if [ ! -f "$SKILL_CACHE_FILE" ]; then
+    needs_skill_scan=true
+  elif [ -f "$CACHE_DIR/force-rescan" ]; then
+    needs_skill_scan=true
+  elif [ "$(( $(date +%s) - $(stat -f %m "$SKILL_CACHE_FILE") ))" -gt "$MAX_AGE" ]; then
+    needs_skill_scan=true
+  fi
 fi
 
 # Remove stale lock files older than 5 minutes
 # Note: stat -f %m is BSD/macOS-specific (returns mtime as epoch)
-if [ -f "$LOCK_FILE" ]; then
-  lock_age=$(( $(date +%s) - $(stat -f %m "$LOCK_FILE") ))
-  if [ "$lock_age" -gt 300 ]; then
-    rm -f "$LOCK_FILE"
+for lf in "$LOCK_FILE" "$SKILL_LOCK_FILE"; do
+  if [ -f "$lf" ]; then
+    lock_age=$(( $(date +%s) - $(stat -f %m "$lf") ))
+    if [ "$lock_age" -gt 300 ]; then
+      rm -f "$lf"
+    fi
   fi
+done
+
+# Clear force-rescan before launching both background scans
+if [ -f "$CACHE_DIR/force-rescan" ]; then
+  rm -f "$CACHE_DIR/force-rescan"
 fi
 
-if $needs_scan && [ ! -f "$LOCK_FILE" ]; then
+if $needs_mcp_scan && [ ! -f "$LOCK_FILE" ]; then
   touch "$LOCK_FILE"
-  rm -f "$CACHE_DIR/force-rescan"
-  # Run scanner in background so SwiftBar stays responsive
+  # Run MCP scanner in background so SwiftBar stays responsive
   (
     if command -v timeout &>/dev/null; then
       SCANNER_CMD="timeout 120 mcp-scanner"
@@ -146,14 +184,65 @@ json.load(open(sys.argv[1]))
   disown
 fi
 
+if $needs_skill_scan && [ ! -f "$SKILL_LOCK_FILE" ]; then
+  touch "$SKILL_LOCK_FILE"
+  # Run skill scanner in background
+  (
+    # Collect existing skill directories
+    existing_dirs=()
+    for d in "${SKILL_DIR_LIST[@]}"; do
+      [ -d "$d" ] && existing_dirs+=("$d")
+    done
+    if [ ${#existing_dirs[@]} -gt 0 ]; then
+      # Scan each directory, extract "results" array, merge into single list
+      all_results="[]"
+      for d in "${existing_dirs[@]}"; do
+        result=$(skill-scanner scan-all "$d" --recursive --format json 2>/dev/null || echo "[]")
+        all_results=$(python3 -c "
+import json, sys, re
+def clean(s):
+    return re.sub(r'[\x00-\x1f\x7f]', ' ', s)
+a = json.loads(clean(sys.argv[1]))
+raw = json.loads(clean(sys.argv[2]))
+# skill-scanner wraps results: {\"summary\": ..., \"results\": [...]}
+if isinstance(raw, dict):
+    b = raw.get('results', [])
+elif isinstance(raw, list):
+    b = raw
+else:
+    b = []
+if not isinstance(a, list): a = []
+print(json.dumps(a + b))
+" "$all_results" "$result")
+      done
+      echo "$all_results" > "$SKILL_CACHE_FILE.tmp"
+      if [ -s "$SKILL_CACHE_FILE.tmp" ] && python3 -c "
+import json, sys
+json.load(open(sys.argv[1]))
+" "$SKILL_CACHE_FILE.tmp" 2>/dev/null; then
+        mv "$SKILL_CACHE_FILE.tmp" "$SKILL_CACHE_FILE"
+      else
+        rm -f "$SKILL_CACHE_FILE.tmp"
+      fi
+    fi
+    rm -f "$SKILL_LOCK_FILE"
+  ) &>/dev/null &
+  disown
+fi
+
 # --- Parse & Display ---
 
-if [ ! -f "$CACHE_FILE" ]; then
-  if [ -f "$LOCK_FILE" ]; then
-    lock_age=$(( $(date +%s) - $(stat -f %m "$LOCK_FILE") ))
+if [ ! -f "$CACHE_FILE" ] && [ ! -f "$SKILL_CACHE_FILE" ]; then
+  if [ -f "$LOCK_FILE" ] || [ -f "$SKILL_LOCK_FILE" ]; then
+    lock_age=0
+    [ -f "$LOCK_FILE" ] && lock_age=$(( $(date +%s) - $(stat -f %m "$LOCK_FILE") ))
+    [ -f "$SKILL_LOCK_FILE" ] && {
+      skill_lock_age=$(( $(date +%s) - $(stat -f %m "$SKILL_LOCK_FILE") ))
+      [ "$skill_lock_age" -gt "$lock_age" ] && lock_age=$skill_lock_age
+    }
     echo "🛡️ ~ | color=#666666"
     echo "---"
-    echo "Scanning MCP servers... (${lock_age}s) | color=#888888"
+    echo "Scanning... (${lock_age}s) | color=#888888"
   else
     echo "🛡️ ?"
     echo "---"
@@ -165,21 +254,40 @@ fi
 
 # Parse results with Python
 IS_SCANNING="false"
-[ -f "$LOCK_FILE" ] && IS_SCANNING="true"
-export PLUGIN_PATH SCAN_INTERVAL IS_SCANNING
+[ -f "$LOCK_FILE" ] || [ -f "$SKILL_LOCK_FILE" ] && IS_SCANNING="true"
+export PLUGIN_PATH SCAN_INTERVAL IS_SCANNING SKILL_CACHE_FILE
 python3 << 'PYEOF'
 import json, os, sys, time
 
 cache_file = os.path.expanduser("~/.cache/mcp-scan/last-scan.json")
+skill_cache_file = os.environ.get("SKILL_CACHE_FILE", os.path.expanduser("~/.cache/mcp-scan/last-skill-scan.json"))
 ignore_file = os.path.expanduser("~/.cache/mcp-scan/ignore.json")
 plugin_path = os.environ.get("PLUGIN_PATH", "")
 scan_interval = int(os.environ.get("SCAN_INTERVAL", "30"))
 is_scanning = os.environ.get("IS_SCANNING", "false") == "true"
 
+# Load MCP scan data
+mcp_data = {}
 try:
     with open(cache_file) as f:
-        data = json.load(f)
+        mcp_data = json.load(f)
 except Exception:
+    pass
+
+# Load skill scan data (sanitize control chars from scanner output)
+skill_results = []
+try:
+    import re
+    with open(skill_cache_file) as f:
+        raw = re.sub(r'[\x00-\x1f\x7f]', ' ', f.read())
+    skill_results = json.loads(raw)
+    if not isinstance(skill_results, list):
+        skill_results = []
+except Exception:
+    skill_results = []
+
+# If neither cache has data, show error
+if not mcp_data and not skill_results:
     print("🛡️ ?")
     print("---")
     print("Failed to parse scan data | color=#888888")
@@ -197,13 +305,17 @@ def sanitize(s):
     """Strip pipes and escape quotes to prevent SwiftBar line-parsing issues."""
     return str(s).replace("|", "-").replace("'", "\\'")
 
-# Collect all findings across config files
-findings = []
+sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+sev_icon = {"CRITICAL": "🔴", "HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}
+sev_color = {"CRITICAL": "#ff4444", "HIGH": "#ff4444", "MEDIUM": "#ffaa00", "LOW": "#88aa00"}
+
+# --- Parse MCP findings ---
+mcp_findings = []
 total_tools = 0
 servers_scanned = set()
 configs_scanned = []
 
-for config_path, tools in data.items():
+for config_path, tools in mcp_data.items():
     if not isinstance(tools, list) or not tools:
         continue
     configs_scanned.append(os.path.basename(config_path))
@@ -225,7 +337,7 @@ for config_path, tools in data.items():
                 elif sev == "LOW" and severity not in ("HIGH", "CRITICAL", "MEDIUM"):
                     severity = sev
                 threat_names.extend(result.get("threat_names", []))
-            findings.append({
+            mcp_findings.append({
                 "server": server,
                 "tool": tool_name,
                 "severity": severity,
@@ -236,16 +348,51 @@ for config_path, tools in data.items():
                 "config": os.path.basename(config_path),
             })
 
-# Count active (non-ignored) issues
-active = [f for f in findings if not f["ignored"]]
-ignored_list = [f for f in findings if f["ignored"]]
-high_count = sum(1 for f in active if f["severity"] in ("HIGH", "CRITICAL"))
-med_count = sum(1 for f in active if f["severity"] == "MEDIUM")
-low_count = sum(1 for f in active if f["severity"] == "LOW")
+# --- Parse skill findings ---
+skill_findings = []
+skills_scanned = set()
+safe_skills = set()
 
-# Handle empty scan results
-if total_tools == 0:
-    configs_found = sum(1 for v in data.values() if isinstance(v, list))
+for entry in skill_results:
+    skill_name = entry.get("skill_name") or entry.get("name") or "unknown"
+    skills_scanned.add(skill_name)
+    findings_data = entry.get("findings") or entry.get("rules_triggered") or []
+    # Filter out INFO-only findings for display; keep MEDIUM+ as actionable
+    actionable = [f for f in findings_data if isinstance(f, dict) and f.get("severity", "").upper() not in ("INFO", "")]
+    if not actionable:
+        safe_skills.add(skill_name)
+    if isinstance(findings_data, list):
+        for finding in findings_data:
+            sev = finding.get("severity", "UNKNOWN").upper()
+            if sev == "INFO":
+                continue
+            rule_id = finding.get("rule_id") or finding.get("id") or "UNKNOWN"
+            title = finding.get("title") or finding.get("message") or rule_id
+            category = finding.get("category", "")
+            ignore_key = f"skill:{skill_name}:{rule_id}"
+            skill_findings.append({
+                "skill": skill_name,
+                "rule_id": rule_id,
+                "title": title,
+                "severity": sev,
+                "category": category,
+                "key": ignore_key,
+                "ignored": ignore_key in ignored,
+            })
+
+# --- Combined counts for menu bar ---
+all_active_mcp = [f for f in mcp_findings if not f["ignored"]]
+all_active_skill = [f for f in skill_findings if not f["ignored"]]
+all_active = all_active_mcp + all_active_skill
+all_ignored = [f for f in mcp_findings if f["ignored"]] + [f for f in skill_findings if f["ignored"]]
+
+high_count = sum(1 for f in all_active if f["severity"] in ("HIGH", "CRITICAL"))
+med_count = sum(1 for f in all_active if f["severity"] == "MEDIUM")
+low_count = sum(1 for f in all_active if f["severity"] == "LOW")
+
+# Handle empty scan results (no tools and no skills)
+if total_tools == 0 and not skill_results:
+    configs_found = sum(1 for v in mcp_data.values() if isinstance(v, list))
     if configs_found == 0:
         bar_line = "🛡️ ? | color=#888888"
         status_line = "No MCP configs found | size=12 color=#888888"
@@ -278,23 +425,32 @@ else:
 print("---")
 
 # Summary header
-cache_mtime = os.path.getmtime(cache_file)
-age_min = int((time.time() - cache_mtime) / 60)
+cache_mtime = 0
+if os.path.exists(cache_file):
+    cache_mtime = os.path.getmtime(cache_file)
+if os.path.exists(skill_cache_file):
+    skill_mtime = os.path.getmtime(skill_cache_file)
+    cache_mtime = max(cache_mtime, skill_mtime)
+age_min = int((time.time() - cache_mtime) / 60) if cache_mtime else 0
 print("MCP Security Scanner | size=14 color=#ffffff")
 next_scan = max(0, scan_interval - age_min)
-print(f"Last scan: {age_min}m ago · next in {next_scan}m · {total_tools} tools · {len(servers_scanned)} servers | size=11 color=#888888")
+summary_parts = [f"Last scan: {age_min}m ago · next in {next_scan}m"]
+if total_tools:
+    summary_parts.append(f"{total_tools} tools · {len(servers_scanned)} servers")
+if skills_scanned:
+    summary_parts.append(f"{len(skills_scanned)} skills")
+print(f"{' · '.join(summary_parts)} | size=11 color=#888888")
 configs_str = ", ".join(configs_scanned) if configs_scanned else "none found"
 print(f"Configs: {configs_str} | size=11 color=#888888")
 print("---")
 
-# Active findings
-if active:
-    print(f"⚠️ Active Findings ({len(active)}) | size=13")
-    sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-    for f in sorted(active, key=lambda x: sev_order.get(x["severity"], 4)):
+# --- MCP Findings ---
+if all_active_mcp:
+    print(f"⚠️ MCP Findings ({len(all_active_mcp)}) | size=13")
+    for f in sorted(all_active_mcp, key=lambda x: sev_order.get(x["severity"], 4)):
         sev = f["severity"]
-        icon = {"CRITICAL": "🔴", "HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}.get(sev, "⚪")
-        color = {"CRITICAL": "#ff4444", "HIGH": "#ff4444", "MEDIUM": "#ffaa00", "LOW": "#88aa00"}.get(sev, "#888888")
+        icon = sev_icon.get(sev, "⚪")
+        color = sev_color.get(sev, "#888888")
         print(f"{icon} {sanitize(f['server'])}/{sanitize(f['tool'])} — {sev} | color={color} size=12")
         if f["threats"]:
             for t in f["threats"]:
@@ -304,22 +460,42 @@ if active:
             print(f"--{desc} | size=11 color=#666666")
         print(f"--Ignore this finding | bash='{plugin_path}' param1=ignore param2='{f['key']}' terminal=false refresh=true")
     print("---")
-else:
+
+# --- Skill Findings ---
+if all_active_skill:
+    print(f"⚠️ Skill Findings ({len(all_active_skill)}) | size=13")
+    for f in sorted(all_active_skill, key=lambda x: sev_order.get(x["severity"], 4)):
+        sev = f["severity"]
+        icon = sev_icon.get(sev, "⚪")
+        color = sev_color.get(sev, "#888888")
+        print(f"{icon} {sanitize(f['skill'])} — {sanitize(f['title'])} — {sev} | color={color} size=12")
+        if f["category"]:
+            print(f"--Category: {sanitize(f['category'])} | size=11 color=#888888")
+        print(f"--Rule: {sanitize(f['rule_id'])} | size=11 color=#666666")
+        print(f"--Ignore this finding | bash='{plugin_path}' param1=ignore param2='{f['key']}' terminal=false refresh=true")
+    print("---")
+
+# No active findings from either scanner
+if not all_active_mcp and not all_active_skill:
     print("✅ No active findings | color=#44bb44")
     print("---")
 
-# Ignored findings
-if ignored_list:
-    print(f"🔇 Ignored ({len(ignored_list)}) | size=13 color=#888888")
-    for f in ignored_list:
+# Ignored findings (combined)
+if all_ignored:
+    print(f"🔇 Ignored ({len(all_ignored)}) | size=13 color=#888888")
+    for f in all_ignored:
         sev = f["severity"]
-        print(f"--{sanitize(f['server'])}/{sanitize(f['tool'])} — {sev} | size=11 color=#888888")
+        if "server" in f:
+            label = f"{sanitize(f['server'])}/{sanitize(f['tool'])}"
+        else:
+            label = f"{sanitize(f['skill'])}/{sanitize(f['rule_id'])}"
+        print(f"--{label} — {sev} | size=11 color=#888888")
         print(f"----Restore this finding | bash='{plugin_path}' param1=unignore param2='{f['key']}' terminal=false refresh=true")
     print("---")
 
 # Safe servers summary
 safe_servers = {}
-for config_path, tools in data.items():
+for config_path, tools in mcp_data.items():
     if not isinstance(tools, list):
         continue
     for tool in tools:
@@ -331,6 +507,13 @@ if safe_servers:
     print("🟢 Safe Servers | size=13 color=#888888")
     for server, count in sorted(safe_servers.items()):
         print(f"--{sanitize(server)}: {count} tools ✓ | size=11 color=#44bb44")
+    print("---")
+
+# Safe skills summary
+if safe_skills:
+    print("🟢 Safe Skills | size=13 color=#888888")
+    for skill in sorted(safe_skills):
+        print(f"--{sanitize(skill)} ✓ | size=11 color=#44bb44")
     print("---")
 
 # Scan interval submenu
