@@ -2,7 +2,7 @@
 # <bitbar.title>MCP Security Scanner</bitbar.title>
 # <bitbar.version>1.0</bitbar.version>
 # <bitbar.author>naufal</bitbar.author>
-# <bitbar.desc>Shows MCP server security findings from Cisco mcp-scanner</bitbar.desc>
+# <bitbar.desc>Shows MCP and AI skill security findings from Cisco scanners</bitbar.desc>
 # <swiftbar.hideAbout>true</swiftbar.hideAbout>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
@@ -28,8 +28,13 @@ DEFAULT_SKILL_DIRS=(
   "$HOME/.codex/skills"
   "$HOME/.cline/skills"
   "$HOME/.opencode/skills"
+  "$HOME/.config/opencode"
   "$HOME/.continue/skills"
   "$HOME/.gemini/skills"
+  "$HOME/.codeium/windsurf/skills"
+  "$HOME/.kiro/skills"
+  "$HOME/.aider"
+  "$HOME/.gpt-engineer"
 )
 
 # Load user config (SCAN_INTERVAL in minutes, default 30)
@@ -255,9 +260,27 @@ fi
 # Parse results with Python
 IS_SCANNING="false"
 [ -f "$LOCK_FILE" ] || [ -f "$SKILL_LOCK_FILE" ] && IS_SCANNING="true"
-export PLUGIN_PATH SCAN_INTERVAL IS_SCANNING SKILL_CACHE_FILE
+
+# Detect scanner versions (try --version/-V, fall back to uv tool list)
+get_version() {
+  local cmd="$1"
+  local ver
+  ver=$("$cmd" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+  [ -n "$ver" ] && echo "$ver" && return
+  ver=$("$cmd" -V 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+  [ -n "$ver" ] && echo "$ver" && return
+  ver=$(uv tool list 2>/dev/null | grep -i "$cmd" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+  [ -n "$ver" ] && echo "$ver" && return
+  echo ""
+}
+MCP_SCANNER_VER=""
+command -v mcp-scanner &>/dev/null && MCP_SCANNER_VER="$(get_version mcp-scanner)"
+SKILL_SCANNER_VER=""
+command -v skill-scanner &>/dev/null && SKILL_SCANNER_VER="$(get_version skill-scanner)"
+
+export PLUGIN_PATH SCAN_INTERVAL IS_SCANNING SKILL_CACHE_FILE MCP_SCANNER_VER SKILL_SCANNER_VER
 python3 << 'PYEOF'
-import json, os, sys, time
+import json, os, re, sys, time, subprocess
 
 cache_file = os.path.expanduser("~/.cache/mcp-scan/last-scan.json")
 skill_cache_file = os.environ.get("SKILL_CACHE_FILE", os.path.expanduser("~/.cache/mcp-scan/last-skill-scan.json"))
@@ -265,6 +288,8 @@ ignore_file = os.path.expanduser("~/.cache/mcp-scan/ignore.json")
 plugin_path = os.environ.get("PLUGIN_PATH", "")
 scan_interval = int(os.environ.get("SCAN_INTERVAL", "30"))
 is_scanning = os.environ.get("IS_SCANNING", "false") == "true"
+mcp_scanner_ver = os.environ.get("MCP_SCANNER_VER", "")
+skill_scanner_ver = os.environ.get("SKILL_SCANNER_VER", "")
 
 # Load MCP scan data
 mcp_data = {}
@@ -277,7 +302,6 @@ except Exception:
 # Load skill scan data (sanitize control chars from scanner output)
 skill_results = []
 try:
-    import re
     with open(skill_cache_file) as f:
         raw = re.sub(r'[\x00-\x1f\x7f]', ' ', f.read())
     skill_results = json.loads(raw)
@@ -314,9 +338,13 @@ mcp_findings = []
 total_tools = 0
 servers_scanned = set()
 configs_scanned = []
+configs_found = 0
 
 for config_path, tools in mcp_data.items():
-    if not isinstance(tools, list) or not tools:
+    if not isinstance(tools, list):
+        continue
+    configs_found += 1
+    if not tools:
         continue
     configs_scanned.append(os.path.basename(config_path))
     for tool in tools:
@@ -348,6 +376,16 @@ for config_path, tools in mcp_data.items():
                 "config": os.path.basename(config_path),
             })
 
+# Safe servers
+safe_servers = {}
+for config_path, tools in mcp_data.items():
+    if not isinstance(tools, list):
+        continue
+    for tool in tools:
+        server = tool.get("server_name", "unknown")
+        if tool.get("is_safe", True):
+            safe_servers[server] = safe_servers.get(server, 0) + 1
+
 # --- Parse skill findings ---
 skill_findings = []
 skills_scanned = set()
@@ -357,7 +395,6 @@ for entry in skill_results:
     skill_name = entry.get("skill_name") or entry.get("name") or "unknown"
     skills_scanned.add(skill_name)
     findings_data = entry.get("findings") or entry.get("rules_triggered") or []
-    # Filter out INFO-only findings for display; keep MEDIUM+ as actionable
     actionable = [f for f in findings_data if isinstance(f, dict) and f.get("severity", "").upper() not in ("INFO", "")]
     if not actionable:
         safe_skills.add(skill_name)
@@ -380,34 +417,18 @@ for entry in skill_results:
                 "ignored": ignore_key in ignored,
             })
 
-# --- Combined counts for menu bar ---
+# --- Combined counts for menu bar icon ---
 all_active_mcp = [f for f in mcp_findings if not f["ignored"]]
 all_active_skill = [f for f in skill_findings if not f["ignored"]]
 all_active = all_active_mcp + all_active_skill
-all_ignored = [f for f in mcp_findings if f["ignored"]] + [f for f in skill_findings if f["ignored"]]
+mcp_ignored = [f for f in mcp_findings if f["ignored"]]
+skill_ignored = [f for f in skill_findings if f["ignored"]]
 
 high_count = sum(1 for f in all_active if f["severity"] in ("HIGH", "CRITICAL"))
 med_count = sum(1 for f in all_active if f["severity"] == "MEDIUM")
 low_count = sum(1 for f in all_active if f["severity"] == "LOW")
 
-# Handle empty scan results (no tools and no skills)
-if total_tools == 0 and not skill_results:
-    configs_found = sum(1 for v in mcp_data.values() if isinstance(v, list))
-    if configs_found == 0:
-        bar_line = "🛡️ ? | color=#888888"
-        status_line = "No MCP configs found | size=12 color=#888888"
-    else:
-        bar_line = "🛡️ ✓ | color=#44bb44"
-        status_line = f"✅ All clear — {configs_found} config{'s' if configs_found != 1 else ''} scanned, 0 threats | size=12 color=#44bb44"
-    print(bar_line)
-    print("---")
-    print("MCP Security Scanner | size=14 color=#ffffff")
-    print(status_line)
-    print("---")
-    print(f"🔄 Scan Now | bash='{plugin_path}' param1=rescan terminal=false refresh=true")
-    sys.exit(0)
-
-# Menu bar icon — dimmed while scan is in progress
+# --- Menu bar icon ---
 if is_scanning:
     colors = {"high": "#884444", "med": "#886622", "low": "#446633", "ok": "#336633"}
 else:
@@ -424,97 +445,128 @@ else:
 
 print("---")
 
-# Summary header
+# === Title and scan timing ===
+print("MCP Security Scanner | size=14 color=#ffffff")
 cache_mtime = 0
 if os.path.exists(cache_file):
     cache_mtime = os.path.getmtime(cache_file)
 if os.path.exists(skill_cache_file):
-    skill_mtime = os.path.getmtime(skill_cache_file)
-    cache_mtime = max(cache_mtime, skill_mtime)
+    cache_mtime = max(cache_mtime, os.path.getmtime(skill_cache_file))
 age_min = int((time.time() - cache_mtime) / 60) if cache_mtime else 0
-print("MCP Security Scanner | size=14 color=#ffffff")
 next_scan = max(0, scan_interval - age_min)
-summary_parts = [f"Last scan: {age_min}m ago · next in {next_scan}m"]
-if total_tools:
-    summary_parts.append(f"{total_tools} tools · {len(servers_scanned)} servers")
-if skills_scanned:
-    summary_parts.append(f"{len(skills_scanned)} skills")
-print(f"{' · '.join(summary_parts)} | size=11 color=#888888")
-configs_str = ", ".join(configs_scanned) if configs_scanned else "none found"
-print(f"Configs: {configs_str} | size=11 color=#888888")
+print(f"Last scan: {age_min}m ago · next in {next_scan}m | size=11 color=#888888")
+
+# Scanner versions
+ver_parts = []
+if mcp_scanner_ver:
+    ver_parts.append(f"mcp-scanner {mcp_scanner_ver}")
+if skill_scanner_ver:
+    ver_parts.append(f"skill-scanner {skill_scanner_ver}")
+if ver_parts:
+    print(f"Scanners: {' · '.join(ver_parts)} | size=11 color=#888888")
+
 print("---")
 
-# --- MCP Findings ---
+# ╔══════════════════════════════════════╗
+# ║        MCP SERVERS SECTION           ║
+# ╚══════════════════════════════════════╝
+
+has_mcp_data = bool(mcp_data)
+print("🔌 MCP Servers | size=14 color=#ffffff")
+
+if not has_mcp_data:
+    print("--No MCP scan data | size=12 color=#888888")
+elif configs_found == 0:
+    print("--No MCP configs found | size=12 color=#888888")
+elif total_tools == 0:
+    configs_str = ", ".join(os.path.basename(p) for p in mcp_data if isinstance(mcp_data[p], list))
+    print(f"--{configs_found} config{'s' if configs_found != 1 else ''} scanned, 0 servers found | size=11 color=#888888")
+else:
+    configs_str = ", ".join(configs_scanned) if configs_scanned else "none"
+    print(f"--{total_tools} tools · {len(servers_scanned)} servers · configs: {configs_str} | size=11 color=#888888")
+
+# MCP findings
 if all_active_mcp:
-    print(f"⚠️ MCP Findings ({len(all_active_mcp)}) | size=13")
+    print(f"--⚠️ Findings ({len(all_active_mcp)}) | size=13")
     for f in sorted(all_active_mcp, key=lambda x: sev_order.get(x["severity"], 4)):
         sev = f["severity"]
         icon = sev_icon.get(sev, "⚪")
         color = sev_color.get(sev, "#888888")
-        print(f"{icon} {sanitize(f['server'])}/{sanitize(f['tool'])} — {sev} | color={color} size=12")
+        print(f"--{icon} {sanitize(f['server'])}/{sanitize(f['tool'])} — {sev} | color={color} size=12")
         if f["threats"]:
             for t in f["threats"]:
-                print(f"--{sanitize(t)} | size=11 color=#888888")
+                print(f"----{sanitize(t)} | size=11 color=#888888")
         if f["description"]:
             desc = sanitize(f["description"][:80])
-            print(f"--{desc} | size=11 color=#666666")
-        print(f"--Ignore this finding | bash='{plugin_path}' param1=ignore param2='{f['key']}' terminal=false refresh=true")
-    print("---")
+            print(f"----{desc} | size=11 color=#666666")
+        print(f"----Ignore this finding | bash='{plugin_path}' param1=ignore param2='{f['key']}' terminal=false refresh=true")
+elif has_mcp_data and total_tools > 0:
+    print("--✅ No findings | color=#44bb44 size=12")
 
-# --- Skill Findings ---
+# MCP ignored
+if mcp_ignored:
+    print(f"--🔇 Ignored ({len(mcp_ignored)}) | size=12 color=#888888")
+    for f in mcp_ignored:
+        print(f"----{sanitize(f['server'])}/{sanitize(f['tool'])} — {f['severity']} | size=11 color=#888888")
+        print(f"------Restore | bash='{plugin_path}' param1=unignore param2='{f['key']}' terminal=false refresh=true")
+
+# Safe servers
+if safe_servers:
+    print(f"--🟢 Safe ({len(safe_servers)} servers) | size=12 color=#888888")
+    for server, count in sorted(safe_servers.items()):
+        print(f"----{sanitize(server)}: {count} tools ✓ | size=11 color=#44bb44")
+
+print("---")
+
+# ╔══════════════════════════════════════╗
+# ║        AI SKILLS SECTION             ║
+# ╚══════════════════════════════════════╝
+
+has_skill_scanner = bool(skill_scanner_ver)
+has_skill_data = bool(skill_results)
+print("🤖 AI Agent Skills | size=14 color=#ffffff")
+
+if not has_skill_scanner:
+    print("--skill-scanner not installed | size=12 color=#888888")
+    print("--Install: uv tool install cisco-ai-skill-scanner | size=11 color=#666666")
+elif not has_skill_data:
+    print("--No skill directories found | size=12 color=#888888")
+else:
+    print(f"--{len(skills_scanned)} skills scanned | size=11 color=#888888")
+
+# Skill findings
 if all_active_skill:
-    print(f"⚠️ Skill Findings ({len(all_active_skill)}) | size=13")
+    print(f"--⚠️ Findings ({len(all_active_skill)}) | size=13")
     for f in sorted(all_active_skill, key=lambda x: sev_order.get(x["severity"], 4)):
         sev = f["severity"]
         icon = sev_icon.get(sev, "⚪")
         color = sev_color.get(sev, "#888888")
-        print(f"{icon} {sanitize(f['skill'])} — {sanitize(f['title'])} — {sev} | color={color} size=12")
+        print(f"--{icon} {sanitize(f['skill'])} — {sanitize(f['title'])} — {sev} | color={color} size=12")
         if f["category"]:
-            print(f"--Category: {sanitize(f['category'])} | size=11 color=#888888")
-        print(f"--Rule: {sanitize(f['rule_id'])} | size=11 color=#666666")
-        print(f"--Ignore this finding | bash='{plugin_path}' param1=ignore param2='{f['key']}' terminal=false refresh=true")
-    print("---")
+            print(f"----Category: {sanitize(f['category'])} | size=11 color=#888888")
+        print(f"----Rule: {sanitize(f['rule_id'])} | size=11 color=#666666")
+        print(f"----Ignore this finding | bash='{plugin_path}' param1=ignore param2='{f['key']}' terminal=false refresh=true")
+elif has_skill_data:
+    print("--✅ No findings | color=#44bb44 size=12")
 
-# No active findings from either scanner
-if not all_active_mcp and not all_active_skill:
-    print("✅ No active findings | color=#44bb44")
-    print("---")
+# Skill ignored
+if skill_ignored:
+    print(f"--🔇 Ignored ({len(skill_ignored)}) | size=12 color=#888888")
+    for f in skill_ignored:
+        print(f"----{sanitize(f['skill'])}/{sanitize(f['rule_id'])} — {f['severity']} | size=11 color=#888888")
+        print(f"------Restore | bash='{plugin_path}' param1=unignore param2='{f['key']}' terminal=false refresh=true")
 
-# Ignored findings (combined)
-if all_ignored:
-    print(f"🔇 Ignored ({len(all_ignored)}) | size=13 color=#888888")
-    for f in all_ignored:
-        sev = f["severity"]
-        if "server" in f:
-            label = f"{sanitize(f['server'])}/{sanitize(f['tool'])}"
-        else:
-            label = f"{sanitize(f['skill'])}/{sanitize(f['rule_id'])}"
-        print(f"--{label} — {sev} | size=11 color=#888888")
-        print(f"----Restore this finding | bash='{plugin_path}' param1=unignore param2='{f['key']}' terminal=false refresh=true")
-    print("---")
-
-# Safe servers summary
-safe_servers = {}
-for config_path, tools in mcp_data.items():
-    if not isinstance(tools, list):
-        continue
-    for tool in tools:
-        server = tool.get("server_name", "unknown")
-        if tool.get("is_safe", True):
-            safe_servers[server] = safe_servers.get(server, 0) + 1
-
-if safe_servers:
-    print("🟢 Safe Servers | size=13 color=#888888")
-    for server, count in sorted(safe_servers.items()):
-        print(f"--{sanitize(server)}: {count} tools ✓ | size=11 color=#44bb44")
-    print("---")
-
-# Safe skills summary
+# Safe skills
 if safe_skills:
-    print("🟢 Safe Skills | size=13 color=#888888")
+    print(f"--🟢 Safe ({len(safe_skills)} skills) | size=12 color=#888888")
     for skill in sorted(safe_skills):
-        print(f"--{sanitize(skill)} ✓ | size=11 color=#44bb44")
-    print("---")
+        print(f"----{sanitize(skill)} ✓ | size=11 color=#44bb44")
+
+print("---")
+
+# ╔══════════════════════════════════════╗
+# ║        ACTIONS & SETTINGS            ║
+# ╚══════════════════════════════════════╝
 
 # Scan interval submenu
 intervals = [("5 minutes", 5), ("10 minutes", 10), ("15 minutes", 15),
@@ -524,7 +576,6 @@ for label, minutes in intervals:
     check = "✓ " if minutes == scan_interval else "    "
     print(f"--{check}{label} | bash='{plugin_path}' param1=set-interval param2={minutes} terminal=false refresh=true")
 print("---")
-# Actions
 print(f"🔄 Scan Now | bash='{plugin_path}' param1=rescan terminal=false refresh=true")
 print(f"🗑️ Clear All Ignores | bash='{plugin_path}' param1=clear-ignores terminal=false refresh=true")
 print(f"📂 Open Ignore List | bash=/usr/bin/open param1='{ignore_file}' terminal=false")
